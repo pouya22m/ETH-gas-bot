@@ -1,0 +1,1 @@
+worker: python gas_tracker_bot.py
