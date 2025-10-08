@@ -97,30 +97,59 @@ def format_gas_message(gas_data, eth_price):
     status_emoji, status_text = get_gas_status(propose_gas)
     trend = get_trend_indicator(propose_gas, base_fee)
     
-    # Calculate costs for standard gas price
+    # Calculate costs for standard gas price with CORRECT gas limits
     try:
-        simple_transfer = calculate_tx_cost(propose_gas, 21000, eth_price)
-        token_swap = calculate_tx_cost(propose_gas, 150000, eth_price)
-        nft_mint = calculate_tx_cost(propose_gas, 100000, eth_price)
-        defi_tx = calculate_tx_cost(propose_gas, 300000, eth_price)
+        # Using realistic gas limits based on Etherscan data
+        simple_transfer = calculate_tx_cost(propose_gas, 21000, eth_price)      # ETH transfer
+        token_swap = calculate_tx_cost(propose_gas, 184000, eth_price)          # Uniswap swap
+        nft_sale = calculate_tx_cost(propose_gas, 170000, eth_price)            # OpenSea/NFT sale
+        bridging = calculate_tx_cost(propose_gas, 120000, eth_price)            # L2 bridge
+        borrowing = calculate_tx_cost(propose_gas, 250000, eth_price)           # Aave/Compound
+        
+        # Calculate for Low gas
+        simple_transfer_low = calculate_tx_cost(safe_gas, 21000, eth_price)
+        token_swap_low = calculate_tx_cost(safe_gas, 184000, eth_price)
+        nft_sale_low = calculate_tx_cost(safe_gas, 170000, eth_price)
+        bridging_low = calculate_tx_cost(safe_gas, 120000, eth_price)
+        borrowing_low = calculate_tx_cost(safe_gas, 250000, eth_price)
+        
+        # Calculate for Fast gas
+        simple_transfer_fast = calculate_tx_cost(fast_gas, 21000, eth_price)
+        token_swap_fast = calculate_tx_cost(fast_gas, 184000, eth_price)
+        nft_sale_fast = calculate_tx_cost(fast_gas, 170000, eth_price)
+        bridging_fast = calculate_tx_cost(fast_gas, 120000, eth_price)
+        borrowing_fast = calculate_tx_cost(fast_gas, 250000, eth_price)
     except:
-        simple_transfer = token_swap = nft_mint = defi_tx = 0
+        simple_transfer = token_swap = nft_sale = bridging = borrowing = 0
+        simple_transfer_low = token_swap_low = nft_sale_low = bridging_low = borrowing_low = 0
+        simple_transfer_fast = token_swap_fast = nft_sale_fast = bridging_fast = borrowing_fast = 0
     
-    # Build message
+    # Build message with improved formatting
     message = f"""⛽ <b>Ethereum Gas Tracker</b>
 
 {status_emoji} <b>{status_text}</b>
 
-<b>Current Prices:</b>
-🐌 Low: {safe_gas} Gwei (~${calculate_tx_cost(safe_gas, 21000, eth_price):.2f})
-⚡ Standard: {propose_gas} Gwei (~${simple_transfer:.2f})
-🚀 Fast: {fast_gas} Gwei (~${calculate_tx_cost(fast_gas, 21000, eth_price):.2f})
+<b>Current Gas Prices:</b>
+🐌 Low: {safe_gas} Gwei
+⚡ Standard: {propose_gas} Gwei
+🚀 Fast: {fast_gas} Gwei
 
-<b>💰 Transaction Costs (Standard):</b>
-- Simple Transfer: ${simple_transfer:.2f}
-- Token Swap: ${token_swap:.2f}
-- NFT Mint: ${nft_mint:.2f}
-- Complex DeFi: ${defi_tx:.2f}
+<b>💰 Transaction Costs:</b>
+
+<b>ETH Transfer (21k gas)</b>
+Low: ${simple_transfer_low:.2f} | Avg: ${simple_transfer:.2f} | Fast: ${simple_transfer_fast:.2f}
+
+<b>Token Swap (184k gas)</b>
+Low: ${token_swap_low:.2f} | Avg: ${token_swap:.2f} | Fast: ${token_swap_fast:.2f}
+
+<b>NFT Sale (170k gas)</b>
+Low: ${nft_sale_low:.2f} | Avg: ${nft_sale:.2f} | Fast: ${nft_sale_fast:.2f}
+
+<b>Bridge to L2 (120k gas)</b>
+Low: ${bridging_low:.2f} | Avg: ${bridging:.2f} | Fast: ${bridging_fast:.2f}
+
+<b>DeFi Borrow (250k gas)</b>
+Low: ${borrowing_low:.2f} | Avg: ${borrowing:.2f} | Fast: ${borrowing_fast:.2f}
 
 <b>📊 Network Info:</b>
 - Base Fee: {base_fee} Gwei
