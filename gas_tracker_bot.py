@@ -101,40 +101,27 @@ def format_gas_message(gas_data, eth_price):
     status_emoji, status_text = get_gas_status(propose_gas)
     trend = get_trend_indicator(propose_gas, base_fee)
     
-    # Calculate costs using ACCURATE gas limits from Etherscan
+    # Calculate costs ONLY for standard gas price with correct gas limits
     try:
-        # These gas limits are reverse-engineered from Etherscan's actual displayed costs
-        simple_transfer = calculate_tx_cost(propose_gas, 21000, eth_price)      # ETH transfer: 21k (standard)
-        erc20_transfer = calculate_tx_cost(propose_gas, 65000, eth_price)       # ERC20 transfer: 65k (USDT/USDC)
-        token_swap = calculate_tx_cost(propose_gas, 31000, eth_price)           # Swap: 31k (Uniswap V3 optimized)
-        nft_sale = calculate_tx_cost(propose_gas, 52000, eth_price)             # NFT Sale: 52k (OpenSea Seaport)
-        bridging = calculate_tx_cost(propose_gas, 10000, eth_price)             # Bridge: 10k (Optimism deposit)
-        borrowing = calculate_tx_cost(propose_gas, 26000, eth_price)            # Borrow: 26k (Aave V3)
-    except Exception as e:
-        print(f"Error calculating costs: {e}")
+        # Using realistic gas limits based on Etherscan data
+        simple_transfer = calculate_tx_cost(propose_gas, 21000, eth_price)       # ETH transfer
+        erc20_transfer = calculate_tx_cost(propose_gas, 65000, eth_price)        # ERC20 token transfer
+        token_swap = calculate_tx_cost(propose_gas, 356190, eth_price)           # Uniswap swap
+        nft_sale = calculate_tx_cost(propose_gas, 601953, eth_price)             # OpenSea/NFT sale
+        bridging = calculate_tx_cost(propose_gas, 114556, eth_price)             # L2 bridge
+        borrowing = calculate_tx_cost(propose_gas, 302169, eth_price)            # Aave/Compound
+    except:
         simple_transfer = erc20_transfer = token_swap = nft_sale = bridging = borrowing = 0
     
-    # Format gas prices to 2 decimal places
-    try:
-        safe_gas_fmt = f"{float(safe_gas):.2f}"
-        propose_gas_fmt = f"{float(propose_gas):.2f}"
-        fast_gas_fmt = f"{float(fast_gas):.2f}"
-        base_fee_fmt = f"{float(base_fee):.2f}"
-    except:
-        safe_gas_fmt = safe_gas
-        propose_gas_fmt = propose_gas
-        fast_gas_fmt = fast_gas
-        base_fee_fmt = base_fee
-    
-    # Build message
+    # Build message with improved formatting
     message = f"""⛽ <b>Ethereum Gas Tracker</b>
 
 {status_emoji} <b>{status_text}</b>
 
 <b>Current Gas Prices:</b>
-🐌 Low: {safe_gas_fmt} Gwei
-⚡ Standard: {propose_gas_fmt} Gwei
-🚀 Fast: {fast_gas_fmt} Gwei
+🐌 Low: {safe_gas} Gwei
+⚡ Standard: {propose_gas} Gwei
+🚀 Fast: {fast_gas} Gwei
 
 <b>💰 Transaction Costs (Standard):</b>
 - ETH Transfer: ${simple_transfer:.2f}
@@ -145,7 +132,7 @@ def format_gas_message(gas_data, eth_price):
 - DeFi Borrow: ${borrowing:.2f}
 
 <b>📊 Network Info:</b>
-- Base Fee: {base_fee_fmt} Gwei
+- Base Fee: {base_fee} Gwei
 - Trend: {trend}
 - ETH Price: ${eth_price:,.2f}
 
