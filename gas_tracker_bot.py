@@ -1,159 +1,54 @@
-import os
-import json
-import requests
-from datetime import datetime
-from dotenv import load_dotenv
+"""
+Ethereum Gas Tracker Telegram Bot
+Main bot file with command handlers and conversation flows
+"""
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    ConversationHandler,
+    MessageHandler,
+    filters
+)
 
-# Load environment variables
-load_dotenv()
+# ============================================================================
+# IMPORTS FROM NEW MODULES
+# ============================================================================
+from config import (
+    TELEGRAM_BOT_TOKEN,
+    ETHERSCAN_API_KEY,
+    ALERT_CHECK_INTERVAL,
+    ALERT_CHECK_FIRST_RUN
+)
+from gas_utils import (
+    fetch_gas_data,
+    get_eth_price,
+    format_gas_message
+)
+from alerts import (
+    AlertManager,
+    check_and_notify_alerts,
+    get_alert_keyboards
+)
+# ============================================================================
 
-ETHERSCAN_API_KEY = os.getenv('ETHERSCAN_API_KEY')
-TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+# Conversation states
+WAITING_FOR_ALERT_PRICE = 1
 
 
-def fetch_gas_data():
-    """Fetch gas data from Etherscan API"""
-    url = "https://api.etherscan.io/v2/api"
-    params = {
-        'chainid': 1,
-        'module': 'gastracker',
-        'action': 'gasoracle',
-        'apikey': ETHERSCAN_API_KEY
-    }
-    
-    try:
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        
-        if data.get('status') == '1':
-            return data['result']
-        return None
-    except Exception as e:
-        print(f"Error fetching gas data: {e}")
-        return None
+# ============================================================================
+# KEYBOARD HELPERS
+# ============================================================================
+def create_main_keyboard():
+    """Create main inline keyboard - NOW INCLUDES ALERT BUTTON"""
+    return get_alert_keyboards()['main']
 
-def get_eth_price():
-    """Fetch current ETH price in USD"""
-    try:
-        response = requests.get(
-            "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd",
-            timeout=10
-        )
-        data = response.json()
-        return data['ethereum']['usd']
-    except:
-        return 2500  # Fallback to default
 
-def calculate_tx_cost(gas_price_gwei, gas_limit, eth_price):
-    """Calculate transaction cost in USD"""
-    gas_price_eth = float(gas_price_gwei) * 1e-9
-    cost_eth = gas_price_eth * gas_limit
-    cost_usd = cost_eth * eth_price
-    return cost_usd
-
-def get_gas_status(gas_price):
-    """Determine gas status based on price"""
-    gas = float(gas_price)
-    if gas < 5:
-        return "🟢 Gas is LOW", "Good time to transact!"
-    elif gas < 15:
-        return "🟡 Gas is NORMAL", "Standard network activity"
-    elif gas < 30:
-        return "🟠 Gas is ELEVATED", "Consider waiting if not urgent"
-    else:
-        return "🔴 Gas is HIGH", "Wait if transaction is not urgent!"
-
-def get_trend_indicator(current_gas, base_fee):
-    """Improved trend indicator based on gas price vs base fee"""
-    try:
-        current = float(current_gas)
-        base = float(base_fee)
-        diff_percent = ((current - base) / base) * 100
-        
-        if diff_percent > 10:
-            return "↗️ Rising Fast"
-        elif diff_percent > 3:
-            return "↗️ Rising"
-        elif diff_percent < -10:
-            return "↘️ Falling Fast"
-        elif diff_percent < -3:
-            return "↘️ Falling"
-        else:
-            return "➡️ Stable"
-    except:
-        return "➡️ Stable"
-
-def format_gas_message(gas_data, eth_price):
-    """Format gas data into a beautiful message"""
-    if not gas_data:
-        return "❌ Unable to fetch gas data. Please try again later."
-    
-    # Extract gas prices
-    safe_gas = gas_data.get('SafeGasPrice', 'N/A')
-    propose_gas = gas_data.get('ProposeGasPrice', 'N/A')
-    fast_gas = gas_data.get('FastGasPrice', 'N/A')
-    base_fee = gas_data.get('suggestBaseFee', propose_gas)
-    
-    # Get status
-    status_emoji, status_text = get_gas_status(propose_gas)
-    trend = get_trend_indicator(propose_gas, base_fee)
-    
-    # Calculate costs ONLY for standard gas price with correct gas limits
-    try:
-        # Using realistic gas limits based on Etherscan data
-        simple_transfer = calculate_tx_cost(propose_gas, 21000, eth_price)       # ETH transfer
-        erc20_transfer = calculate_tx_cost(propose_gas, 65000, eth_price)        # ERC20 token transfer
-        token_swap = calculate_tx_cost(propose_gas, 356190, eth_price)           # Uniswap swap
-        nft_sale = calculate_tx_cost(propose_gas, 601953, eth_price)             # OpenSea/NFT sale
-        bridging = calculate_tx_cost(propose_gas, 114556, eth_price)             # L2 bridge
-        borrowing = calculate_tx_cost(propose_gas, 302169, eth_price)            # Aave/Compound
-    except:
-        simple_transfer = erc20_transfer = token_swap = nft_sale = bridging = borrowing = 0
-    
-    # Build message with improved formatting
-    message = f"""⛽ <b>Ethereum Gas Tracker</b>
-
-{status_emoji} <b>{status_text}</b>
-
-<b>Current Gas Prices:</b>
-🐌 Low: {safe_gas} Gwei
-⚡ Standard: {propose_gas} Gwei
-🚀 Fast: {fast_gas} Gwei
-
-<b>💰 Transaction Costs (Standard):</b>
-- ETH Transfer: ${simple_transfer:.2f}
-- ERC20 Transfer: ${erc20_transfer:.2f}
-- Token Swap: ${token_swap:.2f}
-- NFT Sale: ${nft_sale:.2f}
-- Bridge to L2: ${bridging:.2f}
-- DeFi Borrow: ${borrowing:.2f}
-
-<b>📊 Network Info:</b>
-- Base Fee: {base_fee} Gwei
-- Trend: {trend}
-- ETH Price: ${eth_price:,.2f}
-
-🕐 <i>Updated: {datetime.now().strftime('%H:%M:%S UTC')}</i>"""
-    
-    return message
-
-def create_keyboard():
-    """Create inline keyboard with action buttons"""
-    keyboard = [
-        [
-            InlineKeyboardButton("🔄 Refresh", callback_data="refresh"),
-            InlineKeyboardButton("📊 History", callback_data="history")
-        ],
-        [
-            InlineKeyboardButton("⏰ Set Alert", callback_data="alert"),
-            InlineKeyboardButton("ℹ️ Help", callback_data="help")
-        ]
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
+# ============================================================================
+# COMMAND HANDLERS
+# ============================================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /start command"""
     welcome_message = """👋 <b>Welcome to Ethereum Gas Tracker Bot!</b>
@@ -162,6 +57,8 @@ I help you monitor Ethereum gas prices in real-time.
 
 <b>Commands:</b>
 /gas - Get current gas prices
+/setalert - Set a gas price alert
+/myalerts - View your active alerts
 /help - Show help information
 
 Click the button below to check current gas prices! ⬇️"""
@@ -175,24 +72,23 @@ Click the button below to check current gas prices! ⬇️"""
         reply_markup=reply_markup
     )
 
+
 async def gas_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /gas command"""
-    # Send "loading" message
     message = await update.message.reply_text("⏳ Fetching current gas prices...")
     
-    # Fetch data
     gas_data = fetch_gas_data()
     eth_price = get_eth_price()
     
-    # Format and send message
     gas_message = format_gas_message(gas_data, eth_price)
-    keyboard = create_keyboard()
+    keyboard = create_main_keyboard()
     
     await message.edit_text(
         gas_message,
         parse_mode='HTML',
         reply_markup=keyboard
     )
+
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /help command"""
@@ -201,7 +97,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 <b>Commands:</b>
 /start - Start the bot
 /gas - Get current gas prices
+/setalert - Set a gas price alert
+/myalerts - View your active alerts
 /help - Show this help message
+
+<b>Gas Price Alerts:</b>
+Set alerts to be notified when gas drops below your target price. The bot checks gas prices every 5 minutes and will send you a notification when your target is reached.
 
 <b>Understanding Gas Prices:</b>
 - <b>Low (Safe)</b>: Cheapest option, slower confirmation
@@ -223,22 +124,130 @@ Need more help? Contact @YourSupportUsername"""
     
     await update.message.reply_text(help_text, parse_mode='HTML')
 
+
+# ============================================================================
+# ALERT COMMAND HANDLERS (NEW)
+# ============================================================================
+async def set_alert_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /setalert command - START CONVERSATION"""
+    gas_data = fetch_gas_data()
+    current_gas = gas_data.get('ProposeGasPrice', 'N/A') if gas_data else 'N/A'
+    
+    message = f"""⏰ <b>Set Gas Price Alert</b>
+
+Current gas price: <b>{current_gas} Gwei</b>
+
+Please send me the gas price (in Gwei) you want to be alerted at.
+
+For example:
+- Send <code>10</code> to be alerted when gas drops below 10 Gwei
+- Send <code>15</code> for 15 Gwei alert
+
+Send /cancel to cancel."""
+    
+    await update.message.reply_text(message, parse_mode='HTML')
+    return WAITING_FOR_ALERT_PRICE
+
+
+async def receive_alert_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle user's alert price input - CONTINUE CONVERSATION"""
+    user_id = update.message.from_user.id
+    text = update.message.text.strip()
+    
+    try:
+        alert_price = float(text)
+        
+        # Add alert using AlertManager
+        result = AlertManager.add_alert(user_id, alert_price)
+        
+        if not result['success']:
+            await update.message.reply_text(
+                f"❌ {result['message']}\n\nTry again or send /cancel"
+            )
+            return WAITING_FOR_ALERT_PRICE
+        
+        # Get current gas for comparison
+        gas_data = fetch_gas_data()
+        current_gas = float(gas_data.get('ProposeGasPrice', 0)) if gas_data else 0
+        
+        status = "🟢 Active" if current_gas > alert_price else "⚠️ Already below target"
+        
+        message = f"""✅ <b>Alert Set Successfully!</b>
+
+🎯 Target: <b>{alert_price} Gwei</b>
+📊 Current: <b>{current_gas:.2f} Gwei</b>
+📍 Status: {status}
+
+You'll be notified when gas drops below {alert_price} Gwei!
+
+Use /myalerts to view all your alerts."""
+        
+        keyboard = get_alert_keyboards()['after_set']
+        
+        await update.message.reply_text(message, parse_mode='HTML', reply_markup=keyboard)
+        return ConversationHandler.END
+        
+    except ValueError:
+        await update.message.reply_text(
+            "❌ Invalid input. Please enter a number.\n\nExample: <code>15</code>\n\nOr send /cancel",
+            parse_mode='HTML'
+        )
+        return WAITING_FOR_ALERT_PRICE
+
+
+async def cancel_alert(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel alert setup - END CONVERSATION"""
+    await update.message.reply_text(
+        "❌ Alert setup cancelled.",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("⛽ Check Gas", callback_data="refresh")
+        ]])
+    )
+    return ConversationHandler.END
+
+
+async def view_alerts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /myalerts command"""
+    user_id = update.message.from_user.id
+    
+    if not AlertManager.has_alerts(user_id):
+        keyboard = get_alert_keyboards()['no_alerts']
+        await update.message.reply_text(
+            AlertManager.format_alerts_message(user_id, 0),
+            parse_mode='HTML',
+            reply_markup=keyboard
+        )
+        return
+    
+    gas_data = fetch_gas_data()
+    current_gas = float(gas_data.get('ProposeGasPrice', 0)) if gas_data else 0
+    
+    alerts_text = AlertManager.format_alerts_message(user_id, current_gas)
+    keyboard = get_alert_keyboards()['alerts_view']
+    
+    await update.message.reply_text(
+        alerts_text,
+        parse_mode='HTML',
+        reply_markup=keyboard
+    )
+
+
+# ============================================================================
+# BUTTON CALLBACK HANDLERS
+# ============================================================================
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle button callbacks"""
     query = update.callback_query
     await query.answer()
     
     if query.data == "refresh":
-        # Update message with loading state
         await query.edit_message_text("⏳ Fetching latest gas prices...")
         
-        # Fetch fresh data
         gas_data = fetch_gas_data()
         eth_price = get_eth_price()
         
-        # Update message
         gas_message = format_gas_message(gas_data, eth_price)
-        keyboard = create_keyboard()
+        keyboard = create_main_keyboard()
         
         await query.edit_message_text(
             gas_message,
@@ -246,50 +255,92 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=keyboard
         )
     
-    elif query.data == "history":
+    # ========================================================================
+    # ALERT-RELATED CALLBACKS (NEW)
+    # ========================================================================
+    elif query.data == "set_alert":
+        gas_data = fetch_gas_data()
+        current_gas = gas_data.get('ProposeGasPrice', 'N/A') if gas_data else 'N/A'
+        
+        message = f"""⏰ <b>Set Gas Price Alert</b>
+
+Current gas price: <b>{current_gas} Gwei</b>
+
+Please send me the gas price (in Gwei) you want to be alerted at.
+
+For example:
+- Send <code>10</code> to be alerted when gas drops below 10 Gwei
+- Send <code>15</code> for 15 Gwei alert
+
+Send /cancel to cancel."""
+        
+        await query.edit_message_text(message, parse_mode='HTML')
+    
+    elif query.data == "view_alerts":
+        user_id = query.from_user.id
+        
+        if not AlertManager.has_alerts(user_id):
+            keyboard = get_alert_keyboards()['no_alerts']
+            await query.edit_message_text(
+                AlertManager.format_alerts_message(user_id, 0),
+                parse_mode='HTML',
+                reply_markup=keyboard
+            )
+            return
+        
+        gas_data = fetch_gas_data()
+        current_gas = float(gas_data.get('ProposeGasPrice', 0)) if gas_data else 0
+        
+        alerts_text = AlertManager.format_alerts_message(user_id, current_gas)
+        keyboard = get_alert_keyboards()['alerts_view']
+        
         await query.edit_message_text(
-            "📊 <b>Gas History Feature</b>\n\n"
-            "This feature is coming soon! It will show:\n"
-            "• 24-hour gas price chart\n"
-            "• Average prices\n"
-            "• Best times to transact\n\n"
-            "Stay tuned! 🚀",
+            alerts_text,
             parse_mode='HTML',
-            reply_markup=create_keyboard()
+            reply_markup=keyboard
         )
     
-    elif query.data == "alert":
-        await query.edit_message_text(
-            "⏰ <b>Price Alert Feature</b>\n\n"
-            "This feature is coming soon! You'll be able to:\n"
-            "• Set custom gas price alerts\n"
-            "• Get notified when gas drops\n"
-            "• Subscribe to daily reports\n\n"
-            "Stay tuned! 🔔",
-            parse_mode='HTML',
-            reply_markup=create_keyboard()
-        )
+    elif query.data == "clear_alerts":
+        user_id = query.from_user.id
+        count = AlertManager.clear_user_alerts(user_id)
+        
+        message = f"✅ Cleared {count} alert(s) successfully!" if count > 0 else "No alerts to clear."
+        
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("⛽ Check Gas", callback_data="refresh")
+        ]])
+        
+        await query.edit_message_text(message, reply_markup=keyboard)
+    # ========================================================================
     
     elif query.data == "help":
         help_text = """<b>🤖 Quick Help</b>
 
 <b>Button Functions:</b>
 🔄 Refresh - Update gas prices
-📊 History - View price trends (coming soon)
-⏰ Set Alert - Create price alerts (coming soon)
+⏰ Set Alert - Create price alerts
+📋 My Alerts - View your alerts
 ℹ️ Help - Show this message
+
+<b>Commands:</b>
+/gas - Get current prices
+/setalert - Set alert
+/myalerts - View alerts
 
 Use /help for detailed information."""
         
         await query.edit_message_text(
             help_text,
             parse_mode='HTML',
-            reply_markup=create_keyboard()
+            reply_markup=create_main_keyboard()
         )
 
+
+# ============================================================================
+# MAIN FUNCTION
+# ============================================================================
 def main():
     """Start the bot"""
-    # Validate environment variables
     if not TELEGRAM_BOT_TOKEN:
         print("❌ Error: TELEGRAM_BOT_TOKEN not found in .env file")
         return
@@ -300,18 +351,51 @@ def main():
     
     print("🤖 Starting Ethereum Gas Tracker Bot...")
     
-    # Create application
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    
+    # ========================================================================
+    # CONVERSATION HANDLER FOR ALERTS (NEW)
+    # ========================================================================
+    alert_conversation = ConversationHandler(
+        entry_points=[CommandHandler("setalert", set_alert_command)],
+        states={
+            WAITING_FOR_ALERT_PRICE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_alert_price)
+            ]
+        },
+        fallbacks=[CommandHandler("cancel", cancel_alert)]
+    )
+    # ========================================================================
     
     # Add handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("gas", gas_command))
     application.add_handler(CommandHandler("help", help_command))
+    
+    # ========================================================================
+    # ADD ALERT HANDLERS (NEW)
+    # ========================================================================
+    application.add_handler(CommandHandler("myalerts", view_alerts_command))
+    application.add_handler(alert_conversation)
+    # ========================================================================
+    
     application.add_handler(CallbackQueryHandler(button_callback))
     
-    # Start bot
+    # ========================================================================
+    # ADD BACKGROUND JOB FOR ALERT CHECKING (NEW)
+    # ========================================================================
+    job_queue = application.job_queue
+    job_queue.run_repeating(
+        check_and_notify_alerts,
+        interval=ALERT_CHECK_INTERVAL,
+        first=ALERT_CHECK_FIRST_RUN
+    )
+    print(f"✅ Alert checker scheduled (every {ALERT_CHECK_INTERVAL}s)")
+    # ========================================================================
+    
     print("✅ Bot is running! Press Ctrl+C to stop.")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
+
 
 if __name__ == "__main__":
     main()
